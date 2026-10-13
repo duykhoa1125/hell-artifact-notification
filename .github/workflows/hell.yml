@@ -5,6 +5,15 @@ on:
     # UTC; intentionally off the beginning of each hour.
     - cron: '3,18,33,48 * * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Test sends a sample image; Live checks current LMEvents'
+        required: true
+        default: test
+        type: choice
+        options:
+          - test
+          - live
 
 permissions:
   contents: read
@@ -28,7 +37,14 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install --disable-pip-version-check -r requirements.txt
+      - name: TEST - recognize sample and send private test message
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'test'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py test-notify --file tests/hell_sample_1.png
       - name: Check only the newest active Hell
+        if: github.event_name == 'schedule' || inputs.mode == 'live'
         id: latest
         run: python bot.py inspect
       - name: Restore dedupe marker

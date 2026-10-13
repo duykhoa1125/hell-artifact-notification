@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+*.sqlite3
+*.key
+*.pem
+__pycache__/
+.venv/
+.state/
+latest.json

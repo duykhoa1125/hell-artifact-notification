@@ -110,30 +110,22 @@ def get_latest():
     return parse_latest_hell(response.text)
 
 
-def notify(post):
-    raw = download_image(post["photo"])
-    score = artifact_score(raw)
-    print(f"Latest #Hell id={post['id']}; icon score={score:.3f}; threshold={THRESHOLD:.2f}")
-    if score < THRESHOLD:
-        print("Not Artifact Hell. No notification.")
-        return
+def send_telegram_photo(raw, caption):
+    """Send a JPEG without logging Bot Token, request URL, or API response body."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
         raise RuntimeError("Missing Telegram secrets")
-    message = f"🔔 HELL CỔ VẬT!\n{post['link']}"
-    # Normalize input into a JPEG before sending; don't trust extension or CDN MIME.
     image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
-        raise RuntimeError("Invalid Telegram image")
+        raise RuntimeError("Invalid image")
     valid, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 88])
     if not valid:
         raise RuntimeError("JPEG encoding failed")
-    # IMPORTANT: Do not print the request URL or exception object (it contains the bot token).
     try:
         response = S.post(
             f"https://api.telegram.org/bot{token}/sendPhoto",
-            data={"chat_id": chat_id, "caption": message},
+            data={"chat_id": chat_id, "caption": caption},
             files={"photo": ("hell.jpg", encoded.tobytes(), "image/jpeg")},
             timeout=(10, 25),
         )
@@ -150,13 +142,38 @@ def notify(post):
     print("Telegram notification delivered")
 
 
+def notify(post):
+    raw = download_image(post["photo"])
+    score = artifact_score(raw)
+    print(f"Latest #Hell id={post['id']}; icon score={score:.3f}; threshold={THRESHOLD:.2f}")
+    if score < THRESHOLD:
+        print("Not Artifact Hell. No notification.")
+        return
+    send_telegram_photo(raw, f"🔔 HELL CỔ VẬT!\n{post['link']}")
+
+
+def test_notify(file_path):
+    """Local fixture only: test icon + real Telegram delivery, without scraping or touching dedupe."""
+    raw = Path(file_path).read_bytes()
+    score = artifact_score(raw)
+    print(f"TEST image icon score={score:.3f}; threshold={THRESHOLD:.2f}")
+    if score < THRESHOLD:
+        raise RuntimeError("TEST sample did not match Artifact icon")
+    send_telegram_photo(raw, "🧪 TEST HELL CỔ VẬT\nĐây là tin nhắn thử nghiệm, KHÔNG phải Hell hiện tại.")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["inspect", "notify", "test-image"])
+    ap.add_argument("mode", choices=["inspect", "notify", "test-image", "test-notify"])
     ap.add_argument("--file", help="Path to latest.json or local test image")
     args = ap.parse_args()
-    if args.mode == "test-image":
-        print(f"Artifact score = {artifact_score(Path(args.file).read_bytes()):.4f}")
+    if args.mode in ("test-image", "test-notify"):
+        if not args.file:
+            ap.error("--file is required for image tests")
+        if args.mode == "test-image":
+            print(f"Artifact score = {artifact_score(Path(args.file).read_bytes()):.4f}")
+        else:
+            test_notify(args.file)
         return
     if args.mode == "inspect":
         post = get_latest()

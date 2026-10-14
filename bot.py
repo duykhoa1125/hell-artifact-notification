@@ -110,36 +110,58 @@ def get_latest():
     return parse_latest_hell(response.text)
 
 
-def send_telegram_photo(raw, caption):
-    """Send a JPEG without logging Bot Token, request URL, or API response body."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
-        raise RuntimeError("Missing Telegram secrets")
-    image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+def send_telegram_photo(raw, caption, post_url=None):
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+    image = cv2.imdecode(
+        np.frombuffer(raw, dtype=np.uint8),
+        cv2.IMREAD_COLOR
+    )
     if image is None:
         raise RuntimeError("Invalid image")
-    valid, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 88])
+
+    valid, encoded = cv2.imencode(".jpg", image)
     if not valid:
         raise RuntimeError("JPEG encoding failed")
-    try:
-        response = S.post(
-            f"https://api.telegram.org/bot{token}/sendPhoto",
-            data={"chat_id": chat_id, "caption": caption},
-            files={"photo": ("hell.jpg", encoded.tobytes(), "image/jpeg")},
-            timeout=(10, 25),
-        )
-    except requests.RequestException:
-        raise RuntimeError("Telegram notification request failed (details hidden)") from None
+
+    payload = {
+        "chat_id": chat_id,
+        "caption": caption,
+        "parse_mode": "HTML",
+        "show_caption_above_media": "true",
+        "disable_notification": "false"
+    }
+
+    if post_url:
+        payload["reply_markup"] = json.dumps({
+            "inline_keyboard": [[{
+                "text": "🎮 XEM HELL NGAY",
+                "url": post_url
+            }]]
+        })
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data=payload,
+        files={
+            "photo": (
+                "hell.jpg",
+                encoded.tobytes(),
+                "image/jpeg"
+            )
+        },
+        timeout=25
+    )
+
     if response.status_code != 200:
-        raise RuntimeError(f"Telegram notification failed (HTTP {response.status_code}; response hidden)")
-    try:
-        ok = response.json().get("ok")
-    except ValueError:
-        ok = False
-    if not ok:
-        raise RuntimeError("Telegram API rejected notification (response hidden)")
-    print("Telegram notification delivered")
+        raise RuntimeError(
+            f"Telegram notification failed: HTTP {response.status_code}"
+        )
+    if not response.json().get("ok"):
+        raise RuntimeError("Telegram rejected notification")
+
 
 
 def notify(post):
@@ -149,7 +171,18 @@ def notify(post):
     if score < THRESHOLD:
         print("Not Artifact Hell. No notification.")
         return
-    send_telegram_photo(raw, f"🔔 HELL CỔ VẬT!\n{post['link']}")
+    caption = (
+        "<b>🚨🚨 HELL CỔ VẬT XUẤT HIỆN!</b>\n\n"
+        "🏺 <b>ARTIFACT HELL</b>\n"
+        "⏳ Kiểm tra ngay trước khi hết giờ!\n\n"
+        "🎯 Nguồn: LMEvents"
+    )
+    
+    send_telegram_photo(
+        raw,
+        caption,
+        post_url=post["link"]
+    )
 
 
 def test_notify(file_path):

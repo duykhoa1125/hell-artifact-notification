@@ -1,42 +1,222 @@
-# Hell Cổ Vật – GitHub Actions miễn phí (public repo)
+# 🔔 Hell Artifact Notification — Lords Mobile
 
-Python + OpenCV + GitHub Actions, chỉ kiểm tra #Hell mới nhất từ **trang web công khai** https://t.me/s/LMEvents, nhận diện biểu tượng nhiệm vụ Cổ Vật ở dải phía trên ảnh và gửi ảnh/link tới Telegram cá nhân. Không cần Telegram user API, Telegram session, VPS hoặc cloud khác.
+Bot tự động theo dõi **Hell Event có nhiệm vụ Cổ Vật (Artifact)** trong Lords Mobile và gửi thông báo đến Telegram cá nhân.
 
-## Cài đặt
+Hệ thống sử dụng **Cloudflare Workers + GitHub Actions + Python + OpenCV + Telegram Bot API**. Ưu tiên miễn phí, bảo mật và không cần duy trì máy chủ riêng.
 
-1. Tạo GitHub repository mới, chọn **Public**. Upload nội dung thư mục này, giữ nguyên `.github/workflows/hell.yml` và `artifact_template.png`.
-2. Tạo bot riêng với https://t.me/BotFather (`/newbot`), lưu token cho **bản thân**. Gửi `/start` cho bot.
-3. Để lấy `chat_id`, truy cập `https://api.telegram.org/bot<TOKEN>/getUpdates` trên máy tính riêng, đọc `message.chat.id` sau khi gửi `/start`. **KHÔNG** chia sẻ URL có token, không chụp/đăng ảnh màn hình chứa token; đóng tab sau khi sử dụng.
-4. GitHub repository → **Settings → Secrets and variables → Actions → New repository secret**: tạo `TELEGRAM_BOT_TOKEN` và `TELEGRAM_CHAT_ID`. Tuyệt đối không commit token vào code/README.
-5. Mở tab **Actions → Hell Artifact Notification → Run workflow** để kiểm thử, xem logs chỉ có ID + độ khớp, không có token.
-6. Mặc định GitHub tự chạy ở phút 03, 18, 33, 48 UTC. Không cần mở máy tính.
+## 1. Mục tiêu
 
-## Chống trùng và an toàn
+- Kiểm tra kênh Telegram `@LMEvents` mỗi 15 phút.
+- Chỉ xử lý bài đăng có hashtag `#Hell`.
+- Không quan tâm hashtag phần thưởng như `#Watcher`, `#BrilliantOrb`.
+- Nhận diện biểu tượng nhiệm vụ Cổ Vật ở phía trên ảnh bằng OpenCV.
+- Nếu đúng, gửi ảnh và link Hell Event vào Telegram.
+- Chỉ kiểm tra Hell mới nhất còn hiệu lực, không quét lịch sử sự kiện.
+- Hạn chế gửi thông báo trùng lặp.
 
-- Workflow cấp duy nhất `contents: read`; **không thể push/commit code** bằng `GITHUB_TOKEN` của job. `actions/checkout` không giữ token trong git config.
-- Dùng Actions cache theo **ID bài Hell** để tránh gửi trùng. Cache có thể bị thu hồi/xóa; trong trường hợp hiếm có thể gửi lại bài cũ. Đây là dedupe *best effort*, không phải bộ nhớ bền vững.
-- Chỉ cho chạy `schedule` và `workflow_dispatch`. Không có sự kiện `pull_request` hoặc `pull_request_target`, không chạy code từ PR bên ngoài.
-- Chỉ đọc public HTML, không lưu session Telegram hay đăng nhập tài khoản game. Chỉ download ảnh từ các tên miền Telegram CDN trong allowlist và giới hạn 5 MB.
-- Secrets vẫn có thể bị lộ nếu **người có quyền ghi sửa mã nguồn/workflow theo hướng độc hại**. Không cấp collaborator write access cho người lạ; bật GitHub 2FA; kiểm tra mỗi thay đổi workflow.
-- Actions logs ở repo public cũng công khai: không bật shell tracing, không ghi URL Bot API hoặc response body, không ghi bí mật vào logs. Nếu lộ token, dùng BotFather để revoke token ngay và đổi secret trên GitHub.
-- Các GitHub Actions của bên thứ ba (`checkout`, `setup-python`, `cache`) đều được **ghim SHA 40 ký tự**, không dùng tag động.
-- `requirements.txt` cố định phiên bản cho tính tái lập, nhưng vẫn cần cập nhật khi có cảnh báo bảo mật.
+## 2. System Architecture
 
-## Giới hạn cần biết
-
-- Đây là **bản thử nghiệm**, chưa được kiểm tra end-to-end trên GitHub với kênh live vì không có Telegram Bot Token của bạn và môi trường kiểm thử không kết nối trực tiếp Telegram.
-- Trang preview HTML của Telegram là nguồn **không chính thức**. Nếu Telegram đổi cấu trúc hoặc giới hạn truy cập từ IP GitHub, bot không đọc được; phải sửa parser hoặc chuyển Telethon sang VPS.
-- Template hình đang dùng dựa trên **2 ảnh đều là Cổ Vật**; không có ảnh âm tính chứng minh ngưỡng 0.93 không báo nhầm. Kiểm tra với vài ảnh nhiệm vụ KHÔNG phải Cổ Vật trước khi tin cậy.
-- Chỉ đọc bài `#Hell` mới nhất trên trang preview (thay vì quét lịch sử); giới hạn tuổi bài là 58 phút để tránh gửi Hell cũ. Bài của cùng giờ có thể bị bỏ lỡ nếu lịch chạy muộn hoặc bài khác đẩy khỏi preview.
-- GitHub scheduled workflows có thể bị trì hoãn/bỏ qua và tự vô hiệu hóa khi public repository không có hoạt động trong 60 ngày. Thỉnh thoảng kiểm tra tab Actions.
-- GitHub Actions tiêu chuẩn trên public repos được miễn phí theo quy định hiện hành, nhưng gói/dịch vụ vẫn có thể thay đổi.
-
-## Kiểm tra ảnh trên PC trước khi upload
-
+```mermaid
+flowchart TD
+    A[Cloudflare Cron - 15 phút] --> B[GitHub Actions API]
+    B --> C[GitHub Actions Runner]
+    D[Telegram LMEvents] --> E[Python Scraper]
+    C --> E
+    E --> F{Có Hell hợp lệ?}
+    F -- Không --> Z[Kết thúc]
+    F -- Có --> G{Đã xử lý?}
+    G -- Có --> Z
+    G -- Chưa --> H[OpenCV Image Matching]
+    H --> I{Artifact score >= 0.93?}
+    I -- Không --> J[Không thông báo]
+    I -- Có --> K[Telegram Bot API]
+    K --> L[Gửi ảnh và link]
+    J --> M[Lưu Actions Cache]
+    L --> M
 ```
-python -m pip install -r requirements.txt
+
+### Tech Stack
+
+| Công nghệ | Vai trò |
+|---|---|
+| Cloudflare Workers | Scheduler chạy mỗi 15 phút |
+| GitHub Actions | Môi trường thực thi Python |
+| Python 3.12 | Logic xử lý chính |
+| Requests + BeautifulSoup | Đọc HTML công khai từ LMEvents |
+| OpenCV + NumPy | Nhận diện biểu tượng Cổ Vật |
+| GitHub Actions Cache | Chống xử lý trùng bài đăng |
+| Telegram Bot API | Gửi thông báo |
+
+## 3. Workflow chi tiết
+
+### Bước 1 — Scheduling
+
+Cloudflare Workers sử dụng Cron Trigger:
+
+```cron
+*/15 * * * *
+```
+
+Tương đương 96 mốc chạy mỗi ngày, vào phút 00, 15, 30 và 45 theo UTC.
+
+Cloudflare gọi GitHub REST API bằng HTTP POST đến endpoint `workflow_dispatch` của `hell.yml`, truyền input `mode: live`.
+
+### Bước 2 — GitHub Actions
+
+GitHub khởi tạo runner Ubuntu, cài đặt Python và các thư viện cần thiết.
+
+Chương trình chạy:
+
+```bash
+python bot.py inspect
+```
+
+### Bước 3 — Lấy Hell Event
+
+Bot truy cập:
+
+https://t.me/s/LMEvents
+
+BeautifulSoup đọc các bài đăng và kiểm tra:
+
+- Có hashtag `#Hell`.
+- Có ảnh và thời điểm đăng hợp lệ.
+- Bài đăng không quá 58 phút tuổi.
+
+Bot chọn bài `#Hell` mới nhất thỏa điều kiện, không quét các bài cũ hơn.
+
+### Bước 4 — Kiểm tra Cache
+
+Bot dùng ID bài đăng để kiểm tra Actions Cache:
+
+```text
+hell-artifact-<post_id>
+```
+
+Nếu đã có cache, bỏ qua. Nếu chưa có, chuyển sang nhận diện ảnh.
+
+### Bước 5 — Image Recognition
+
+Bot tải ảnh Hell, chuẩn hóa kích thước về 500 × 249 pixel, rồi sử dụng OpenCV Template Matching để so sánh biểu tượng nhiệm vụ với `artifact_template.png`.
+
+Ngưỡng nhận diện hiện tại:
+
+```python
+THRESHOLD = 0.93
+```
+
+- Score từ 0.93 trở lên: Xác định là Hell Cổ Vật.
+- Score dưới 0.93: Không thông báo.
+
+Không sử dụng AI API, OCR hay các dịch vụ nhận diện ảnh trả phí.
+
+### Bước 6 — Telegram Notification
+
+Nếu đạt ngưỡng, bot gọi Telegram Bot API `sendPhoto`, gửi ảnh sự kiện kèm link bài đăng gốc.
+
+Ví dụ:
+
+```text
+🔔 HELL CỔ VẬT!
+https://t.me/LMEvents/22403
+```
+
+ID trong ví dụ chỉ để minh họa định dạng liên kết.
+
+## 4. Deployment
+
+### GitHub
+
+Repository: https://github.com/duykhoa1125/hell-artifact-notification
+
+GitHub Secrets:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
+Workflow nằm tại:
+
+```text
+.github/workflows/hell.yml
+```
+
+Chỉ sử dụng `workflow_dispatch` để nhận lệnh từ Cloudflare hoặc chạy thủ công. GitHub Cron cũ đã được loại khỏi cấu hình được kiểm tra.
+
+### Cloudflare Workers
+
+- Tạo Worker `hell-artifact-scheduler`.
+- Thêm GitHub fine-grained PAT dưới dạng Cloudflare Secret `GH_TOKEN`.
+- PAT chỉ được truy cập repository này với quyền Actions cần thiết.
+- Cấu hình Cron `*/15 * * * *`.
+- Worker dùng GitHub REST API để kích hoạt workflow với mode `live`.
+
+Mã Python chạy trên GitHub Actions, không chạy trên Cloudflare.
+
+## 5. Security Design
+
+Repository được đặt Public nhưng không công khai thông tin xác thực.
+
+- Telegram Bot Token và Chat ID được lưu bằng GitHub Actions Secrets.
+- GitHub PAT được lưu riêng bằng Cloudflare Secret.
+- Không sử dụng Telegram session hoặc đăng nhập tài khoản Lords Mobile.
+- GitHub workflow giới hạn `contents: read`.
+- Không kích hoạt workflow từ Pull Request không tin cậy.
+- Giới hạn nguồn tải ảnh và kích thước file.
+- Không ghi token hoặc dữ liệu nhạy cảm ra logs.
+
+Các token phải được thu hồi và thay mới nếu có dấu hiệu bị lộ.
+
+## 6. Testing & Monitoring
+
+### Image Test
+
+```bash
 python bot.py test-image --file tests/hell_sample_1.png
-python bot.py test-image --file tests/hell_sample_2.png
 ```
 
-Kết quả hai ảnh này phải có score cao. Để kiểm tra âm tính, chạy `test-image` với các ảnh Hell không có Cổ Vật.
+Hai ảnh mẫu Hell Cổ Vật ban đầu có độ khớp rất cao.
+
+### Live Test
+
+Trong GitHub Actions:
+
+1. Chọn **Hell Artifact Notification**.
+2. Chọn **Run workflow**.
+3. Chọn chế độ `live`.
+4. Kiểm tra logs.
+
+Ví dụ log đã quan sát:
+
+```text
+Latest #Hell id=22403; icon score=0.546; threshold=0.93
+Not Artifact Hell. No notification.
+```
+
+### Monitoring
+
+- **Cloudflare Logs:** Kiểm tra lệnh gọi GitHub API.
+- **GitHub Actions Logs:** Kiểm tra scraper, kết quả nhận diện và lỗi.
+- **Telegram:** Xác minh thông báo đến thiết bị.
+
+Dấu tích xanh của một GitHub job không có nghĩa bot đã gửi thông báo: việc không phát hiện Cổ Vật cũng là một kết quả hợp lệ.
+
+**Lưu ý:** Ở phiên bản mã nguồn được kiểm tra, workflow gọi `test-notify` nhưng `bot.py` chưa hỗ trợ lệnh này. Chế độ Test cần được đồng bộ trước khi dùng.
+
+## 7. Limitations
+
+- Cloudflare Cron và GitHub Actions không bảo đảm lịch chạy chính xác tuyệt đối.
+- Nếu nhiều Hell được đăng trước lần kiểm tra tiếp theo, bot có thể bỏ lỡ sự kiện cũ.
+- Template Matching có thể không chính xác nếu giao diện hoặc kích thước ảnh thay đổi.
+- Telegram có thể thay đổi cấu trúc HTML của trang public.
+- GitHub Actions Cache có thể hết hạn hoặc bị xóa.
+- GitHub Token có thời hạn và cần được gia hạn khi hết hạn.
+
+## 8. Kết luận
+
+Hệ thống sử dụng kiến trúc **Serverless Scheduler + On-Demand Processing**:
+
+**Cloudflare Workers → GitHub Actions → Python/OpenCV → Telegram.**
+
+Ưu điểm chính là chi phí dự kiến gần 0, không cần VPS, không cần bật PC, tận dụng hệ sinh thái GitHub và dễ bảo trì.
+
+Thiết kế ưu tiên sự đơn giản, không hướng tới hệ thống giám sát thời gian thực có cam kết SLA.

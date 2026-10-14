@@ -1,9 +1,6 @@
 name: Hell Artifact Notification
 
 on:
-  schedule:
-    # UTC; intentionally off the beginning of each hour.
-    - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
     inputs:
       mode:

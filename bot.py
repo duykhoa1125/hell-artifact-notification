@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -17,6 +18,8 @@ SOURCE = "https://t.me/s/LMEvents"
 BASE = Path(__file__).resolve().parent
 MAX_AGE_MIN = 58  # skip expired posts, even if the GitHub cron queue is delayed
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+IMAGE_FETCH_ATTEMPTS = 4
+IMAGE_FETCH_BACKOFF_SECONDS = 1
 THRESHOLD = 0.93
 PATTERN = re.compile(r"(?<!\w)#Hell\b", re.I)
 PHOTO_PATTERN = re.compile(r"background-image\s*:\s*url\(['\"]?([^)'\"]+)", re.I)
@@ -78,15 +81,37 @@ def parse_latest_hell(html, now=None):
 
 def download_image(url):
     safe_photo_url(url)
-    with S.get(url, timeout=(10, 20), stream=True, allow_redirects=False) as response:
-        if response.status_code != 200:
-            raise RuntimeError(f"Image fetch failed (HTTP {response.status_code})")
-        data = bytearray()
-        for chunk in response.iter_content(65536):
-            data.extend(chunk)
-            if len(data) > MAX_IMAGE_BYTES:
-                raise RuntimeError("Image too large")
-    return bytes(data)
+    last_error = None
+    for attempt in range(1, IMAGE_FETCH_ATTEMPTS + 1):
+        try:
+            with S.get(url, timeout=(10, 20), stream=True, allow_redirects=False) as response:
+                if response.status_code == 200:
+                    data = bytearray()
+                    for chunk in response.iter_content(65536):
+                        data.extend(chunk)
+                        if len(data) > MAX_IMAGE_BYTES:
+                            raise RuntimeError("Image too large")
+                    return bytes(data)
+
+                last_error = RuntimeError(
+                    f"Image fetch failed (HTTP {response.status_code})"
+                )
+                retryable = 500 <= response.status_code < 600
+        except requests.RequestException as error:
+            last_error = RuntimeError(f"Image fetch failed ({error})")
+            retryable = True
+
+        if not retryable or attempt == IMAGE_FETCH_ATTEMPTS:
+            raise last_error
+
+        delay = IMAGE_FETCH_BACKOFF_SECONDS * (2 ** (attempt - 1))
+        print(
+            f"Image fetch attempt {attempt}/{IMAGE_FETCH_ATTEMPTS} failed; "
+            f"retrying in {delay}s"
+        )
+        time.sleep(delay)
+
+    raise last_error
 
 
 def artifact_score(raw):
